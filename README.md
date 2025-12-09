@@ -1,7 +1,7 @@
 # PadelApp
 
 This is a Blazor Server application for managing a padel tournament, including poule phase, bracket phase, user management, and match results.  
-The project targets **.NET 9** and uses **C# 13**.
+The project targets **.NET 10** and uses **C# 14**.
 
 ## Project Structure
 
@@ -13,7 +13,7 @@ The project targets **.NET 9** and uses **C# 13**.
 
 ## Setup
 
-1. **.NET 9 SDK** required.
+1. **.NET 10 SDK** required.
 2. The app uses Entity Framework Core for persistence.
 3. Run the app with `dotnet run` from the root directory.
 
