@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="PadelApp.AppHost/PadelApp.AppHost.csproj" />
+  <Project Path="PadelApp.ServiceDefaults/PadelApp.ServiceDefaults.csproj" />
+  <Project Path="PadelApp.Tests/PadelApp.Tests.csproj" />
+  <Project Path="PadelApp/PadelApp.csproj" />
+</Solution>

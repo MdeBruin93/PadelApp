@@ -1,0 +1,112 @@
+﻿@page "/crew"
+@using PadelApp.Services
+
+<PageTitle>Organisatie</PageTitle>
+
+<h3>Organisatie Overzicht</h3>
+
+@if (_crewAndAdmins == null)
+{
+    <div>Loading...</div>
+}
+else if (!_crewAndAdmins.Any())
+{
+    <div>Er zijn geen crew of admin gebruikers.</div>
+}
+else
+{
+    <div class="table-responsive mb-4">
+        <table class="table table-bordered table-striped">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Discord Name</th>
+                    <th>Role</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var user in _crewAndAdmins)
+                {
+                    <tr>
+                        <td>@user.Name</td>
+                        <td>@user.DiscordName</td>
+                        <td>@user.Role</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+<h4>Poule fase</h4>
+<div class="table-responsive mb-4">
+    <table class="table table-bordered table-striped">
+        <thead>
+            <tr>
+                <th>Baan</th>
+                <th>Poule</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>Baan 2</td><td>Poule A</td></tr>
+            <tr><td>Baan 3</td><td>Poule B</td></tr>
+            <tr><td>Baan 4</td><td>Poule C</td></tr>
+            <tr><td>Baan 5</td><td>Poule D</td></tr>
+            <tr><td>Baan 6</td><td>Poule E</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<h4>Lower Bracket</h4>
+<div class="table-responsive mb-4">
+    <table class="table table-bordered table-striped">
+        <thead>
+            <tr>
+                <th>Baan</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>Baan 2</td></tr>
+            <tr><td>Baan 3</td></tr>
+            <tr><td>Baan 4</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<h4>Upper Bracket</h4>
+<div class="table-responsive mb-4">
+    <table class="table table-bordered table-striped">
+        <thead>
+            <tr>
+                <th>Baan</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>Baan 5</td></tr>
+            <tr><td>Baan 6</td></tr>
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private List<CrewUser>? _crewAndAdmins;
+
+    [Inject]
+    public required IUserService UserService { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var allUsers = await UserService.GetAllCrewAndAdminsAsync();
+        _crewAndAdmins = allUsers
+            .OrderBy(cu => cu.Role)
+            .ThenBy(u => u.Name)
+            .ToList();
+    }
+
+    public class CrewUser
+    {
+        public string Name { get; set; } = string.Empty;
+        public string DiscordName { get; set; } = string.Empty;
+        public string Role { get; set; } = string.Empty;
+    }
+}

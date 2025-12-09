@@ -1,0 +1,42 @@
+﻿@if (ShowNotification)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background:rgba(0,0,0,0.5);" role="dialog">
+        <div class="modal-dialog modal-dialog-centered" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Bracket Released!</h5>
+                    <button type="button" class="btn-close" @onclick="CloseNotification" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Je bracket is vrijgegeven.</p>
+                    <p>Ververs de pagina om de brackets te bekijken.</p>
+                    <p><strong>Bracket:</strong> @BracketType</p>
+                    <p><strong>Position Code:</strong> @PositionCode</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    [Parameter]
+    public bool ShowNotification { get; set; }
+
+    [Parameter]
+    public string BracketType { get; set; } = "";
+
+    [Parameter]
+    public string PositionCode { get; set; } = "";
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    private async Task CloseNotification()
+    {
+        if (OnClose.HasDelegate)
+        {
+            await OnClose.InvokeAsync();
+        }
+    }
+}

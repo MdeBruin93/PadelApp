@@ -1,0 +1,351 @@
+﻿@page "/my-matches"
+
+@using System.Timers
+@using Microsoft.AspNetCore.Authorization
+@using PadelApp.Config
+@using PadelApp.Data.Models
+@using PadelApp.Services
+
+@attribute [Authorize]
+
+@implements IDisposable
+
+@inject IPouleService PouleService
+@inject IBracketService BracketService
+@inject ISchemeReleaseService SchemeReleaseService
+@inject IRealtimeService RealtimeService
+
+<AuthorizeView>
+    @if (!SchemeReleaseService.PoulesReleased && !context.User.IsInRole(RoleConstants.Admin))
+    {
+        <div class="alert alert-info mt-3">
+            De poules zijn nog niet vrijgegeven.
+        </div>
+        return;
+    }
+
+    <h4>Poulefase</h4>
+    @if (_myPouleMatches.Count == 0)
+    {
+        <div>Je hebt geen poulewedstrijden.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-bordered table-striped">
+                <thead>
+                    <tr>
+                        <th>Poule</th>
+                        <th>Starttijd</th>
+                        <th>Team A</th>
+                        <th>Score</th>
+                        <th>Team B</th>
+                        <th>Score</th>
+                        <th>Resultaat</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var match in _myPouleMatches)
+                    {
+                        <tr class="@(match.IsActive ? "table-success" : "")">
+                            <td>@match.Poule.Name</td>
+                            <td>@match.StartTime.ToString("HH:mm")</td>
+                            <td>@string.Join(", ", match.TeamA.Select(p => p.Name))</td>
+                            <td>@(match.ScoreTeamA < 0 ? "" : match.ScoreTeamA)</td>
+                            <td>@string.Join(", ", match.TeamB.Select(p => p.Name))</td>
+                            <td>@(match.ScoreTeamB < 0 ? "" : match.ScoreTeamB)</td>
+                            <td>@GetMatchResult(match)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    @if (SchemeReleaseService.BracketsReleased)
+    {
+        <h4 class="mt-4">Bracketfase Wedstrijdschema</h4>
+        @if (_myBracketRounds.Count == 0)
+        {
+            <div>Je zit niet in een bracket of er zijn geen wedstrijden voor jou.</div>
+        }
+        else
+        {
+            @foreach (var match in _myBracketRounds)
+            {
+                // var myMatch = .FirstOrDefault(m => m.Players.Any(p => p.Id == Guid.Parse(_userId)));
+                <div class="mb-3">
+                    <strong>Ronde @match.BracketRoundNumber:</strong>
+                    @* @if (myMatch is null) *@
+                    @* { *@
+                    @*     <span>Je hebt deze ronde een pauze.</span> *@
+                    @* } *@
+                    @* else *@
+                    @* { *@
+                    <div class="@(match.IsActive ? "table-success" : "")">
+                        <span>Baan: @match.Court</span>
+                        <span>Starttijd: @match.StartTime.ToString("HH:mm")</span><br/>
+                        <span>Team A: @string.Join(", ", match.TeamA.Select(p => GetPositionCode(p) + " (" + p.Name + ")"))</span><br/>
+                        <span>Team B: @string.Join(", ", match.TeamB.Select(p => GetPositionCode(p) + " (" + p.Name + ")"))</span><br/>
+                        <span>Score: @(match.IsFinished ? $"{match.ScoreTeamA} - {match.ScoreTeamB}" : "Nog niet gespeeld")</span>
+                    </div>
+                    @* } *@
+                </div>
+            }
+        }
+    }
+</AuthorizeView>
+
+@code {
+
+    [Inject]
+    public IHttpContextAccessor HttpContextAccessor { get; set; } = null!;
+    private string _userId = null!;
+
+    private List<PouleMatchViewModel> _myPouleMatches = new();
+    private List<BracketMatchViewModel> _myBracketRounds = new();
+    private Dictionary<Guid, string> _positionCodes = new();
+    private Timer _timer = null!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        RealtimeService.ReceiveScoreUpdateEventHandler += RealtimeServiceOnReceiveScoreUpdateEventHandler;
+        RealtimeService.PoulesReleased += RealtimeServiceOnPoulesReleased;
+        RealtimeService.BracketsReleased += RealtimeServiceOnBracketsReleased;
+
+        _userId = HttpContextAccessor.GetUserId();
+
+        var poules = await PouleService.GetAllPouleInfoForCurrentUser(Guid.Parse(_userId));
+
+        var pouleMatches = poules.SelectMany(p => p.Item2).ToList();
+        MapPouleMatches(pouleMatches);
+
+        if (SchemeReleaseService.BracketsReleased)
+        {
+            await LoadBracketRoundsForUserAsync(Guid.Parse(_userId));
+        }
+
+        await RealtimeService.StartConnectionAsync();
+
+        // Register this connection with the user's ID
+        await RealtimeService.RegisterUserAsync(_userId);
+
+        // Timer checks every 5 seconds (adjust as needed)
+        _timer = new Timer(5);
+        _timer.Elapsed += OnTimerElapsed;
+        _timer.AutoReset = true;
+        _timer.Start();
+    }
+
+    private void MapPouleMatches(List<Match> pouleMatches)
+    {
+        _myPouleMatches.Clear();
+        foreach (var pouleMatch in pouleMatches)
+        {
+            _myPouleMatches.Add(new PouleMatchViewModel
+            {
+                Id = pouleMatch.Id,
+                ConcurrencyStamp = pouleMatch.ConcurrencyStamp,
+                ScoreTeamA = pouleMatch.ScoreTeamA,
+                ScoreTeamB = pouleMatch.ScoreTeamB,
+                IsFinished = pouleMatch.IsFinished,
+                Court = pouleMatch.Court,
+                StartTime = pouleMatch.StartTime,
+                PouleId = pouleMatch.PouleId,
+                Poule = pouleMatch.Poule,
+                Players = pouleMatch.Players,
+                TeamA = pouleMatch.TeamA,
+                TeamB = pouleMatch.TeamB
+            });
+        }
+    }
+
+    private async void RealtimeServiceOnReceiveScoreUpdateEventHandler(object? sender, ReceiveScoreUpdate e)
+    {
+        var pouleMatch = _myPouleMatches.FirstOrDefault(m => m.Id == e.MatchId);
+        if (pouleMatch != null)
+        {
+            pouleMatch.ScoreTeamA = e.ScoreA;
+            pouleMatch.ScoreTeamB = e.ScoreB;
+            pouleMatch.IsFinished = true;
+            await InvokeAsync(StateHasChanged);
+        }
+
+        if (SchemeReleaseService.BracketsReleased)
+        {
+            var bracketMatch = _myBracketRounds.FirstOrDefault(bm => bm.Id == e.MatchId);
+            if (bracketMatch is not null)
+            {
+                bracketMatch.ScoreTeamA = e.ScoreA;
+                bracketMatch.ScoreTeamB = e.ScoreB;
+                bracketMatch.IsFinished = true;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    public async void RealtimeServiceOnPoulesReleased(object? sender, EventArgs e)
+    {
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public async void RealtimeServiceOnBracketsReleased(object? sender, BracketsReleased e)
+    {
+        await LoadBracketRoundsForUserAsync(Guid.Parse(_userId));
+
+        // BracketSettingsService.ReloadSettings();
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task LoadBracketRoundsForUserAsync(Guid userId)
+    {
+        var bracketMatches = await BracketService.GetBracketRoundsForUserAsync(userId);
+
+        var viewModels = bracketMatches.Select(bracketMatch => new BracketMatchViewModel
+        {
+            Id = bracketMatch.Id,
+            ConcurrencyStamp = bracketMatch.ConcurrencyStamp,
+            ScoreTeamA = bracketMatch.ScoreTeamA,
+            ScoreTeamB = bracketMatch.ScoreTeamB,
+            IsFinished = bracketMatch.IsFinished,
+            Court = bracketMatch.Court,
+            BracketRoundNumber = bracketMatch.BracketRoundNumber,
+            BracketType = bracketMatch.BracketType,
+            StartTime = bracketMatch.StartTime,
+            BracketId = bracketMatch.BracketId,
+            Players = bracketMatch.Players,
+            TeamA = bracketMatch.TeamA,
+            TeamB = bracketMatch.TeamB
+        })
+            .ToList();
+
+        _myBracketRounds = viewModels;
+        _positionCodes = await BracketService.GetAllPositionCodes();
+    }
+
+    private string GetPositionCode(ApplicationUser player)
+    {
+        return _positionCodes.GetValueOrDefault(player.Id, "?");
+    }
+
+    private string GetMatchResult(PouleMatchViewModel match)
+    {
+        if (!match.IsFinished)
+        {
+            return "Nog niet gespeeld";
+        }
+
+        if (match.ScoreTeamA > match.ScoreTeamB)
+        {
+            return "Team A wint";
+        }
+
+        if (match.ScoreTeamA < match.ScoreTeamB)
+        {
+            return "Team B wint";
+        }
+        return "Gelijk";
+    }
+
+    private async void OnTimerElapsed(object? sender, ElapsedEventArgs e)
+    {
+        var now = DateTime.Now;
+
+        var pouleActiveRecord = _myPouleMatches
+            .Where(r => r.StartTime <= now)
+            .OrderByDescending(r => r.StartTime)
+            .FirstOrDefault();
+
+        // Find the last record whose StartTime is less than or equal to current time
+        var bracketActiveRecord = _myBracketRounds
+            .Where(r => r.StartTime <= now)
+            .OrderByDescending(r => r.StartTime)
+            .FirstOrDefault();
+
+        if (bracketActiveRecord is null)
+        {
+            foreach (var pouleMatch in _myPouleMatches)
+            {
+                pouleMatch.IsActive = pouleActiveRecord != null && pouleMatch.Id == pouleActiveRecord.Id;
+            }
+        }
+        else
+        {
+            foreach (var bracketMatchViewModel in _myBracketRounds)
+            {
+                bracketMatchViewModel.IsActive = bracketActiveRecord != null && bracketMatchViewModel.Id == bracketActiveRecord.Id;
+            }
+        }
+
+        // Trigger UI update
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        RealtimeService.ReceiveScoreUpdateEventHandler -= RealtimeServiceOnReceiveScoreUpdateEventHandler;
+        RealtimeService.PoulesReleased -= RealtimeServiceOnPoulesReleased;
+        RealtimeService.BracketsReleased -= RealtimeServiceOnBracketsReleased;
+
+        _timer?.Dispose();
+    }
+
+    private bool IsActive(DateTime startTime)
+    {
+        var now = DateTime.Now;
+
+        // Find the last record whose StartTime is less than or equal to current time
+        var activeRecord = _myBracketRounds
+            .Where(r => r.StartTime <= now)
+            .OrderByDescending(r => r.StartTime)
+            .FirstOrDefault();
+        return true;
+    }
+
+    private class PouleMatchViewModel
+    {
+        public Guid Id { get; set; }
+
+        public string? ConcurrencyStamp { get; set; }
+
+        // Add scores for TeamA and TeamB
+        public int ScoreTeamA { get; set; }
+        public int ScoreTeamB { get; set; }
+
+        // Add a property to indicate if the match is finished
+        public bool IsFinished { get; set; }
+        public int Court { get; set; }
+
+        public DateTime StartTime { get; set; }
+        public bool IsActive { get; set; }
+
+        public Guid PouleId { get; set; }
+        public Poule Poule { get; set; } = null!;
+
+        public List<ApplicationUser> Players { get; set; } = null!;
+        public List<ApplicationUser> TeamA { get; set; } = null!;
+        public List<ApplicationUser> TeamB { get; set; } = null!;
+    }
+
+    private class BracketMatchViewModel
+    {
+        public Guid Id { get; set; }
+        public string? ConcurrencyStamp { get; set; }
+        public int ScoreTeamA { get; set; }
+        public int ScoreTeamB { get; set; }
+        public bool IsFinished { get; set; }
+        public int Court { get; set; }
+        public int BracketRoundNumber { get; set; }
+        public BracketType BracketType { get; set; }
+
+        public DateTime StartTime { get; set; }
+        public bool IsActive { get; set; }
+
+        public Guid BracketId { get; set; }
+
+        public List<ApplicationUser> Players { get; set; } = null!;
+        public List<ApplicationUser> TeamA { get; set; } = null!;
+        public List<ApplicationUser> TeamB { get; set; } = null!;
+    }
+}

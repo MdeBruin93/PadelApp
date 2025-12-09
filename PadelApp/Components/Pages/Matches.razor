@@ -1,0 +1,370 @@
+﻿@page "/matches"
+
+@implements IDisposable
+
+@using System.Timers
+@using Microsoft.AspNetCore.Authorization
+@using PadelApp.Config
+@using PadelApp.Data.EditModels
+@using PadelApp.Data.Models
+@using PadelApp.Services
+
+@inject ISchemeReleaseService SchemeReleaseService
+@inject IPouleService PouleService
+@inject IRealtimeService RealtimeService
+@inject IMatchService MatchService
+
+@attribute [Authorize(Roles = $"{RoleConstants.Admin},{RoleConstants.Crew}")]
+
+<PageTitle>Speelschema</PageTitle>
+
+<h3>Speelschema</h3>
+
+<AuthorizeView>
+    @if (!SchemeReleaseService.PoulesReleased && !context.User.IsInRole(RoleConstants.Admin))
+    {
+        <div class="alert alert-info mt-3">
+            De poules zijn nog niet vrijgegeven.
+        </div>
+        return;
+    }
+
+    @if (SchemeReleaseService.BracketsReleased && !context.User.IsInRole(RoleConstants.Admin))
+    {
+        <div class="alert alert-info mt-3">
+            Scores kunnen niet langer worden ingevoerd of aangepast omdat de brackets zijn vrijgegeven.
+        </div>
+        return;
+    }
+
+    @if (_allMatches.Count == 0)
+    {
+        <div>Geen wedstrijden gevonden.</div>
+    }
+    else
+    {
+        <div class="card mb-4 shadow-sm" style="max-width: 500px;">
+            <div class="card-body">
+                <h5 class="card-title mb-3">Filter wedstrijden</h5>
+                <div class="row g-3 align-items-center">
+                    <div class="d-flex justify-content-end mb-2">
+                        <button class="btn btn-outline-secondary" @onclick="ResetFilters">Reset filters</button>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Poule</label>
+                        <InputSelect class="form-select" @bind-Value="_pouleFilter">
+                            <option value="@Guid.Empty">Selecteer poule</option>
+                            @foreach (var pi in _poulesGuids)
+                            {
+                                <option value="@pi.Key">@pi.Value</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Baan</label>
+                        <InputSelect class="form-select" @bind-Value="_courtFilter">
+                            <option value="-1">Alle banen</option>
+                            @for (int i = 2; i <= 6; i++)
+                            {
+                                <option value="@i">Baan @i</option>
+                            }
+                        </InputSelect>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-bordered table-striped">
+                <thead>
+                    <tr>
+                        <th>Baan</th>
+                        <th>Poule</th>
+                        <th>Starttijd</th>
+                        <th>Team A</th>
+                        <th>Score</th>
+                        <th>Team B</th>
+                        <th>Score</th>
+                        <th>Result</th>
+                        @if ((context.User.IsInRole(RoleConstants.Admin) || context.User.IsInRole(RoleConstants.Crew)) && !SchemeReleaseService.BracketsReleased)
+                        {
+                            <th>Wijzig score</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var match in FilteredMatches)
+                    {
+                        <tr class="@(IsActive(match.Id) ? "table-success" : "")">
+                            <td>@match.Court</td>
+                            <td>@match.Poule.Name</td>
+                            <td>@match.StartTime.ToString("HH:mm")</td>
+                            <td>
+                                @for (int i = 0; i < match.TeamA.Count; i++)
+                                {
+                                    var player = match.TeamA[i];
+                                    <span>@player.Name</span>
+                                    if (i < match.TeamA.Count - 1)
+                                    {
+                                        <span>, </span>
+                                    }
+                                }
+                            </td>
+                            <td>@(match.ScoreTeamA < 0 ? "" : match.ScoreTeamA)</td>
+                            <td>
+                                @for (int i = 0; i < match.TeamB.Count; i++)
+                                {
+                                    var player = match.TeamB[i];
+                                    <span>@player.Name</span>
+                                    if (i < match.TeamB.Count - 1)
+                                    {
+                                        <span>, </span>
+                                    }
+                                }
+                            </td>
+                            <td>@(match.ScoreTeamB < 0 ? "" : match.ScoreTeamB)</td>
+                            <td>@GetMatchResult(match)</td>
+                            @if ((context.User.IsInRole(RoleConstants.Admin) || context.User.IsInRole(RoleConstants.Crew)) && !SchemeReleaseService.BracketsReleased)
+                            {
+                                <td>
+                                    @* @if (_isMobile) *@
+                                    @* { *@
+                                    <button class="btn btn-sm btn-primary" @onclick="() => OpenEditModal(match)">Edit</button>
+                                    @* } *@
+                                    @* else *@
+                                    @* { *@
+                                    @*     <EditForm Context="_" Model="@_editMatch" OnValidSubmit="() => UpdateMatchScoreAsync(_editMatch, match.Id)"> *@
+                                    @*         <DataAnnotationsValidator /> *@
+                                    @*         <div class="d-flex gap-2"> *@
+                                    @*             <InputNumber class="form-control" @bind-Value="_editMatch.ScoreTeamA" /> *@
+                                    @*             <InputNumber class="form-control" @bind-Value="_editMatch.ScoreTeamB" /> *@
+                                    @*             <button type="submit" class="btn btn-sm btn-primary">Save</button> *@
+                                    @*         </div> *@
+                                    @*         <ValidationMessage For="@(() => _editMatch.ScoreTeamA)" /> *@
+                                    @*         <ValidationMessage For="@(() => _editMatch.ScoreTeamB)" /> *@
+                                    @*     </EditForm> *@
+                                    @* } *@
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    <!-- Modal for editing scores on mobile -->
+    @if (_showEditModal)
+    {
+        <div class="modal fade show d-block" tabindex="-1" style="background:rgba(0,0,0,0.5);" role="dialog">
+            <div class="modal-dialog modal-dialog-centered" role="document">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Wijzig Score</h5>
+                        <button type="button" class="btn-close" @onclick="CloseEditModal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <EditForm Context="_" Model="@_editMatch" OnValidSubmit="HandleModalEditSubmit">
+                            <DataAnnotationsValidator />
+                            <div class="mb-3">
+                                <label>Score Team A</label>
+                                <InputNumber class="form-control" @bind-Value="_editMatch.ScoreTeamA" />
+                                <ValidationMessage For="@(() => _editMatch.ScoreTeamA)" />
+                            </div>
+                            <div class="mb-3">
+                                <label>Score Team B</label>
+                                <InputNumber class="form-control" @bind-Value="_editMatch.ScoreTeamB" />
+                                <ValidationMessage For="@(() => _editMatch.ScoreTeamB)" />
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">Save</button>
+                        </EditForm>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-backdrop fade show"></div>
+    }
+</AuthorizeView>
+
+@code {
+
+    [Inject]
+    public IHttpContextAccessor HttpContextAccessor { get; set; } = null!;
+
+    private Dictionary<Guid, string> _poulesGuids = new();
+    private Guid _pouleFilter;
+    private int _courtFilter;
+
+    // private bool _isMobile;
+    private bool _showEditModal;
+    private EditMatch _editMatch = new();
+
+    private Timer? _timer;
+    private Guid _activeId = Guid.Empty;
+
+    private List<Match> FilteredMatches
+    {
+        get
+        {
+            IEnumerable<Match> matches = _allMatches;
+            if (_pouleFilter != Guid.Empty)
+            {
+                matches = matches.Where(m => m.PouleId == _pouleFilter);
+            }
+            if (_courtFilter > 0)
+            {
+                matches = matches.Where(m => m.Court == _courtFilter);
+            }
+            return matches.ToList();
+        }
+    }
+
+    private List<Match> _allMatches = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var poules = await PouleService.GetAllPouleInfo(true);
+
+        _poulesGuids = poules.ToDictionary(t => t.Item1.Id, t => t.Item1.Name);
+
+        _allMatches = poules.SelectMany(t => t.Item2).OrderBy(m => m.StartTime).ToList();
+
+        RealtimeService.ReceiveScoreUpdateEventHandler += RealtimeServiceOnReceiveScoreUpdateEventHandler;
+
+        await RealtimeService.StartConnectionAsync();
+
+        // Timer checks every 5 seconds (adjust as needed)
+        _timer = new Timer(5);
+        _timer.Elapsed += OnTimerElapsed;
+        _timer.AutoReset = true;
+        _timer.Start();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Detect if mobile
+            // _isMobile = await JS.InvokeAsync<bool>("isMobile");
+
+            StateHasChanged();
+        }
+
+        await base.OnAfterRenderAsync(firstRender);
+    }
+
+    private async void OnTimerElapsed(object? sender, ElapsedEventArgs e)
+    {
+        var now = DateTime.Now;
+
+        var pouleActiveRecord = FilteredMatches
+            .Where(r => r.StartTime <= now)
+            .OrderByDescending(r => r.StartTime)
+            .FirstOrDefault();
+
+        _activeId = pouleActiveRecord?.Id ?? Guid.Empty;
+
+        // Trigger UI update
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private bool IsActive(Guid matchId)
+    {
+        return _activeId == matchId;
+    }
+
+    private async void RealtimeServiceOnReceiveScoreUpdateEventHandler(object? sender, ReceiveScoreUpdate e)
+    {
+        var match = _allMatches.FirstOrDefault(m => m.Id == e.MatchId);
+        if (match != null)
+        {
+            match.ScoreTeamA = e.ScoreA;
+            match.ScoreTeamB = e.ScoreB;
+            match.IsFinished = true;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ResetFilters()
+    {
+        _pouleFilter = Guid.Empty;
+        _courtFilter = -1;
+    }
+
+    private string GetMatchResult(Match match)
+    {
+        if (!match.IsFinished)
+        {
+            return "Nog niet gespeeld";
+        }
+
+        if (match.ScoreTeamA > match.ScoreTeamB)
+        {
+            return "Team A wint";
+        }
+
+        if (match.ScoreTeamA < match.ScoreTeamB)
+        {
+            return "Team B wint";
+        }
+        return "Gelijk";
+    }
+
+    public async Task UpdateMatchScoreAsync(EditMatch editMatch)
+    {
+        if (SchemeReleaseService.BracketsReleased)
+        {
+            // Editing is disabled after brackets are released
+            return;
+        }
+
+        if (!HttpContextAccessor.HttpContext!.User.IsInRole(RoleConstants.Admin) && !HttpContextAccessor.HttpContext!.User.IsInRole(RoleConstants.Crew))
+        {
+            throw new UnauthorizedAccessException("Only Admin or Crew can edit scores.");
+        }
+
+        var match = await MatchService.FindByIdAsync(editMatch.Id); //_allMatches.First(m => m.Id == editMatch.Id);
+        int orignalScoreA = match.ScoreTeamA;
+        int orignalScoreB = match.ScoreTeamB;
+
+        match.ScoreTeamA = _editMatch.ScoreTeamA;
+        match.ScoreTeamB = _editMatch.ScoreTeamB;
+        match.IsFinished = true;
+        await MatchService.SaveChangesAsync(match, HttpContextAccessor.GetUserName(), editMatch.PouleName, orignalScoreA, orignalScoreB);
+
+        StateHasChanged();
+
+        // Broadcast score update to other clients
+        await RealtimeService.BroadcastScoreUpdateAsync(match.Id, _editMatch.ScoreTeamA, _editMatch.ScoreTeamB);
+    }
+
+    private async Task HandleModalEditSubmit()
+    {
+        await UpdateMatchScoreAsync(_editMatch);
+        _showEditModal = false;
+    }
+
+    private void OpenEditModal(Match match)
+    {
+        // Clone the match to avoid editing the table directly before save
+        _editMatch = new EditMatch
+        {
+            Id = match.Id,
+            PouleName = match.Poule.Name,
+            ScoreTeamA = match.ScoreTeamA,
+            ScoreTeamB = match.ScoreTeamB
+        };
+        _showEditModal = true;
+    }
+
+    private void CloseEditModal()
+    {
+        _showEditModal = false;
+    }
+
+    public void Dispose()
+    {
+        RealtimeService.ReceiveScoreUpdateEventHandler -= RealtimeServiceOnReceiveScoreUpdateEventHandler;
+
+        _timer?.Dispose();
+    }
+}

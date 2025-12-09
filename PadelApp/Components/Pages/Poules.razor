@@ -1,0 +1,129 @@
+﻿@page "/poules"
+
+@using Microsoft.AspNetCore.Authorization
+@using PadelApp.Config
+@using PadelApp.Data.Models
+@using PadelApp.Services
+
+@inject ISchemeReleaseService SchemeReleaseService
+@inject IPouleService PouleService
+@inject IPlayerStatsService PlayerStatsService
+
+@attribute [Authorize(Roles = RoleConstants.Admin)]
+
+<PageTitle>Poules</PageTitle>
+
+<AuthorizeView>
+    @if (!SchemeReleaseService.PoulesReleased && !@context.User.IsInRole(RoleConstants.Admin))
+    {
+        <div class="alert alert-info mt-3">
+            De poules zijn nog niet vrijgegeven.
+        </div>
+    }
+    @if (SchemeReleaseService.BracketsReleased)
+    {
+        <div class="alert alert-danger mt-3">
+            De brackets zijn vrijgegeven, de poulefase is voorbij.
+        </div>
+    }
+
+    <h3>Poules</h3>
+
+    @if (_poules.Count == 0)
+    {
+        <div class="alert alert-info mt-3">
+            De poules zijn leeg.
+        </div>
+    }
+
+    @foreach (var poule in _poules)
+    {
+        <div class="mb-4">
+            <h5>@poule.Name (@poule.Code)</h5>
+            <div class="table-responsive">
+                <table class="table table-bordered table-striped">
+                    <thead>
+                        <tr>
+                            <th>Position code</th>
+                            <th>Name</th>
+                            <th>Matches Played</th>
+                            <th>Matches Won</th>
+                            <th>Draw</th>
+                            <th>Matches Lost</th>
+                            <th>Points Scored</th>
+                            <th>Points Lost</th>
+                            <th>Total Points</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in GetSortedPlayerStats(poule))
+                        {
+                            var positionCode = $"{poule.Code}{entry.Position}";
+                            <tr>
+                                <td>@positionCode</td>
+                                <td>@entry.Player.Name</td>
+                                <td>@entry.MatchesPlayed</td>
+                                <td>@entry.MatchesWon</td>
+                                <td>@entry.Draws</td>
+                                <td>@entry.MatchesLost</td>
+                                <td>@entry.PointsScored</td>
+                                <td>@entry.PointsLost</td>
+                                <td>@entry.TotalPoints</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (SchemeReleaseService.BracketsReleased)
+            {
+                <div class="alert alert-danger mt-3">
+                    De brackets zijn vrijgegeven, de poulefase is voorbij.
+                </div>
+            }
+        </div>
+    }
+
+    @code
+    {
+        private List<Poule> _poules = new();
+        private Dictionary<Guid, List<Match>> _matchesByPoule = new();
+
+        protected override async Task OnInitializedAsync()
+        {
+            _poules = new();
+            _matchesByPoule = new();
+            var result = await PouleService.GetAllPouleInfo(includePlayers: true);
+            foreach (var tuple in result)
+            {
+                _poules.Add(tuple.Item1);
+                _matchesByPoule[tuple.Item1.Id] = tuple.Item2;
+            }
+        }
+
+        private List<PlayerStatsEntry> GetSortedPlayerStats(Poule poule)
+        {
+            // Use Distinct to ensure we don't process duplicate players
+            var uniquePlayers = poule.Players.DistinctBy(p => p.Id);
+            var statsList = uniquePlayers.Select(player => PlayerStatsService.GetPlayerStatsForPoule(player, poule.Id, _matchesByPoule)).ToList();
+
+            var sorted = statsList
+                .OrderByDescending(e => e.TotalPoints)
+                .ThenByDescending(e => e.PointsScored - e.PointsLost)
+                .ThenByDescending(e => e.PointsScored)
+                .ThenByDescending(e => e.MatchesWon)
+                .ThenByDescending(e => e.Draws)
+                .ThenBy(e => e.MatchesLost)
+                .ThenBy(e => e.Player.Name)
+                .ToList();
+
+            // Assign position numbers (1-based)
+            for (int i = 0; i < sorted.Count; i++)
+            {
+                sorted[i].Position = i + 1;
+            }
+
+            return sorted;
+        }
+    }
+</AuthorizeView>

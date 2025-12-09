@@ -1,0 +1,21 @@
+﻿@page "/"
+
+<PageTitle>Home</PageTitle>
+
+<AuthorizeView>
+    <Authorized>
+        <h1>Hallo @context.User.Identity?.Name!</h1>
+    </Authorized>
+    <NotAuthorized>
+        <h1>Hallo kijker!</h1>
+    </NotAuthorized>
+</AuthorizeView>
+
+Welkom bij het Familien padeltoernooi 2025!
+<br />
+Heel veel plezier en veel succes!
+
+@code
+{
+    [CascadingParameter] public HttpContext HttpContext { get; set; } = default!;
+}

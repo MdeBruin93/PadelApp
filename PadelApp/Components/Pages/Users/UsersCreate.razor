@@ -1,0 +1,100 @@
+﻿@page "/users/create"
+
+@using System.Web
+@using Microsoft.AspNetCore.Authorization
+@using PadelApp.Config
+@using PadelApp.Services
+
+@attribute [Authorize(Roles = RoleConstants.Admin)]
+
+@inject IUserService UserService
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>Create user</PageTitle>
+
+<h3>Create User</h3>
+
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="alert alert-danger">@errorMessage</div>
+}
+
+<EditForm Model="@user" OnValidSubmit="HandleValidSubmit">
+    <DataAnnotationsValidator />
+    <ValidationSummary />
+
+    <div class="mb-3">
+        <label>Name</label>
+        <InputText class="form-control" @bind-Value="user.Name" />
+        <ValidationMessage For="@(() => user.Name)" />
+    </div>
+    <div class="mb-3">
+        <label>Discord Name</label>
+        <InputText class="form-control" @bind-Value="user.DiscordName" />
+        <ValidationMessage For="@(() => user.DiscordName)" />
+    </div>
+    <div class="mb-3">
+        <label>Role</label>
+        <InputSelect class="form-control" @bind-Value="user.Role">
+            <option value="">Select role</option>
+            <option value="@RoleConstants.Guest">@RoleConstants.Guest</option>
+            <option value="@RoleConstants.Player">@RoleConstants.Player</option>
+            <option value="@RoleConstants.Crew">@RoleConstants.Crew</option>
+            <option value="@RoleConstants.Admin">@RoleConstants.Admin</option>
+        </InputSelect>
+    </div>
+    <div class="mb-3">
+        <button type="button" class="btn btn-outline-secondary mt-2" @onclick="CopyLoginUrl">
+            Copy login URL
+        </button>
+    </div>
+    <button type="submit" class="btn btn-primary">Save</button>
+    <a class="btn btn-secondary ms-2" href="/users">Cancel</a>
+</EditForm>
+
+@code {
+    private string _pass = string.Empty;
+    private UserViewModel user = new();
+    private string? errorMessage;
+
+    private async Task HandleValidSubmit()
+    {
+        errorMessage = null;
+        try
+        {
+            if (string.IsNullOrEmpty(_pass))
+            {
+                errorMessage = "Please generate and copy the login URL before saving.";
+                return;
+            }
+
+            var result = await UserService.AddAsync(user, _pass);
+            if (!result.Succeeded)
+            {
+                errorMessage = string.Join("; ", result.Errors.Select(e => e.Description));
+            }
+            else
+            {
+                Navigation.NavigateTo("/users");
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (Exception)
+        {
+            errorMessage = "An unexpected error occurred.";
+        }
+    }
+
+    private async Task CopyLoginUrl()
+    {
+        _pass = PasswordGenerator.GeneratePassword();
+        var authKey = AuthKeyGenerator.GenerateEncryptedKey(_pass);
+
+        var url = $"{Navigation.BaseUri}account/login?authCode={HttpUtility.UrlEncode(authKey)}";
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", url);
+    }
+}

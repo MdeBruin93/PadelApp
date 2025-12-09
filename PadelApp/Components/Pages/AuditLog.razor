@@ -1,0 +1,84 @@
+﻿@page "/audit"
+
+@using Microsoft.AspNetCore.Authorization
+@using PadelApp.Config
+@using PadelApp.Data.Models
+@using PadelApp.Services
+
+@attribute [Authorize(Roles = RoleConstants.Admin)]
+
+@inject IAuditService AuditService
+
+<PageTitle>Audit Log</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">Audit Log</h3>
+    <button class="btn btn-primary" @onclick="RefreshAuditLogs">
+        <i class="bi bi-arrow-clockwise"></i> Refresh
+    </button>
+</div>
+
+@if (_isLoading)
+{
+    <div class="spinner-border" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+}
+else if (_auditLogs == null)
+{
+    <div class="alert alert-info">
+        No audit logs available.
+    </div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Action</th>
+                    <th>User</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var audit in _auditLogs)
+                {
+                    <tr>
+                        <td>@audit.Timestamp.ToLocalTime().ToString("g")</td>
+                        <td>@audit.Action</td>
+                        <td>@audit.Username</td>
+                        <td>@audit.Details</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+
+    private List<Audit>? _auditLogs;
+    private bool _isLoading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAuditLogs();
+    }
+
+    private async Task RefreshAuditLogs()
+    {
+        _isLoading = true;
+        try
+        {
+            _auditLogs = await AuditService.GetAuditLogsAsync();
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+}

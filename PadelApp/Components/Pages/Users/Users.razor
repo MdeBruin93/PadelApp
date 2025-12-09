@@ -1,0 +1,52 @@
+﻿@page "/users"
+
+@using Microsoft.AspNetCore.Authorization
+@using PadelApp.Config
+@using PadelApp.Services
+
+@attribute [Authorize(Roles = RoleConstants.Admin)]
+
+@inject IUserService UserService
+
+<PageTitle>Users</PageTitle>
+
+<h3>Users</h3>
+
+<div class="table-responsive">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Discord Name</th>
+                <th>Role</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var user in _users)
+            {
+                <tr>
+                    <td>@user.Name</td>
+                    <td>@user.DiscordName</td>
+                    <td>@user.Role</td>
+                    <td>
+                        <a class="btn btn-sm btn-secondary" href="/users/edit/@user.Id">Edit</a>
+                        <a class="btn btn-sm btn-danger" href="/users/delete/@user.Id">Delete</a>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+<a class="btn btn-primary mb-2" href="/users/create">Create User</a>
+
+@code {
+    private List<UserViewModel> _users = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        _users = await UserService.GetAllAsync();
+    }
+}

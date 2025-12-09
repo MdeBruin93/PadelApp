@@ -1,0 +1,98 @@
+﻿@inherits LayoutComponentBase
+
+@using PadelApp.Config
+@using PadelApp.Data.Models
+@using PadelApp.Services
+@using PadelApp.Components.Shared
+
+@implements IDisposable
+
+@inject NavigationManager Navigation
+@inject IRealtimeService RealtimeService
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <div class="top-row px-4">
+        </div>
+
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+<AuthorizeView>
+    @if (_showBracketNotification && context.User.IsInRole(RoleConstants.Player))
+    {
+        <BracketNotification OnClose="@(() => _showBracketNotification = false)"
+                             ShowNotification="_showBracketNotification"
+                             BracketType="@_notificationBracketType.ToString()"
+                             PositionCode="@_notificationPositionCode" />
+    }
+</AuthorizeView>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code
+{
+    [Inject]
+    public IHttpContextAccessor HttpContextAccessor { get; set; } = null!;
+
+    [Inject]
+    private AuthenticationStateProvider AuthenticationStateProvider { get; set; } = null!;
+
+    private bool _showBracketNotification;
+    private BracketType _notificationBracketType;
+    private string? _notificationPositionCode;
+
+    protected override void OnInitialized()
+    {
+        RealtimeService.BracketsReleased += OnBracketsReleased;
+        RealtimeService.Init(Navigation.ToAbsoluteUri("/padelhub"));
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await RealtimeService.StartConnectionAsync();
+
+            if (HttpContextAccessor.HttpContext?.User.Identity is { IsAuthenticated: true })
+            {
+                await RealtimeService.RegisterUserAsync(HttpContextAccessor.GetUserId());
+            }
+        }
+    }
+
+    private async void OnBracketsReleased(object? sender, BracketsReleased e)
+    {
+        var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        if (state.User.Identity is not { IsAuthenticated: true })
+        {
+            return;
+        }
+
+        if (state.User.Claims.GetUserId() != e.PlayerId)
+        {
+            return;
+        }
+
+        _notificationBracketType = e.BracketType;
+        _notificationPositionCode = e.PositionCode;
+        _showBracketNotification = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        RealtimeService.BracketsReleased -= OnBracketsReleased;
+    }
+}

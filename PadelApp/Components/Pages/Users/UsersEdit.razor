@@ -1,0 +1,126 @@
+﻿@page "/users/edit/{Id:guid}"
+
+@using System.Web
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@using PadelApp.Config
+@using PadelApp.Data.Models
+@using PadelApp.Services
+
+@attribute [Authorize(Roles = RoleConstants.Admin)]
+
+@inject IUserService UserService
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject UserManager<ApplicationUser> UserManager
+
+@if (viewModel is null)
+{
+    <p>User not found.</p>
+}
+else
+{
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger">@errorMessage</div>
+    }
+
+    <EditForm Model="@viewModel" OnValidSubmit="HandleValidSubmit">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+
+        <div class="mb-3">
+            <label>Name</label>
+            <InputText class="form-control" @bind-Value="viewModel.Name" />
+            <ValidationMessage For="@(() => viewModel.Name)" />
+        </div>
+        <div class="mb-3">
+            <label>Discord Name</label>
+            <InputText class="form-control" @bind-Value="viewModel.DiscordName" />
+            <ValidationMessage For="@(() => viewModel.DiscordName)" />
+        </div>
+        <div class="mb-3">
+            <label>Role</label>
+            <InputSelect class="form-control" @bind-Value="viewModel.Role">
+                <option value="">Select role</option>
+                <option value="@RoleConstants.Guest">@RoleConstants.Guest</option>
+                <option value="@RoleConstants.Player">@RoleConstants.Player</option>
+                <option value="@RoleConstants.Crew">@RoleConstants.Crew</option>
+                <option value="@RoleConstants.Admin">@RoleConstants.Admin</option>
+            </InputSelect>
+        </div>
+        <div class="mb-3">
+            <button type="button" class="btn btn-outline-secondary mt-2" @onclick="CopyLoginUrl">
+                Copy login URL
+            </button>
+        </div>
+        <button type="submit" class="btn btn-primary">Save</button>
+        <a class="btn btn-secondary ms-2" href="/users">Cancel</a>
+    </EditForm>
+}
+@code {
+    [Parameter]
+    public Guid Id { get; set; }
+
+    private UserViewModel? viewModel;
+    private string? errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await UserService.GetViewModelByIdAsync(Id);
+        if (user is not null)
+        {
+            // Clone to avoid editing the list directly before save
+            viewModel = new UserViewModel
+            {
+                Id = user.Id,
+                Name = user.Name,
+                DiscordName = user.DiscordName,
+                Role = user.Role
+            };
+        }
+    }
+
+    private async Task HandleValidSubmit()
+    {
+        errorMessage = null;
+        try
+        {
+            await UserService.UpdateViewModelAsync(viewModel!);
+            Navigation.NavigateTo("/users");
+        }
+        catch (InvalidOperationException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (Exception)
+        {
+            errorMessage = "An unexpected error occurred.";
+        }
+    }
+
+    private async Task CopyLoginUrl()
+    {
+        if (viewModel is null)
+        {
+            return;
+        }
+
+        var pass = PasswordGenerator.GeneratePassword();
+
+        var user = await UserService.GetByIdAsync(Id);
+        var resetToken = await UserManager.GeneratePasswordResetTokenAsync(user!);
+        var result = await UserManager.ResetPasswordAsync(user!, resetToken, pass);
+
+        if (!result.Succeeded)
+        {
+            errorMessage = "Failed to generate login URL.";
+            return;
+        }
+
+        var securedKey = AuthKeyGenerator.GenerateEncryptedKey(pass);
+
+        var url = $"{Navigation.BaseUri}account/login?authCode={HttpUtility.UrlEncode(securedKey)}";
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", url);
+    }
+}

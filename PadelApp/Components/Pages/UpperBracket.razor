@@ -1,0 +1,334 @@
+﻿@page "/upper-bracket"
+
+@implements IDisposable
+
+@using System.Timers
+@using Microsoft.AspNetCore.Authorization
+@using PadelApp.Config
+@using PadelApp.Data.EditModels
+@using PadelApp.Data.Models
+@using PadelApp.Services
+
+@inject IBracketService BracketService
+@inject ISchemeReleaseService SchemeReleaseService
+@inject IJSRuntime JS
+@inject IRealtimeService RealtimeService
+@inject IPlayerStatsService PlayerStatsService
+
+@attribute [Authorize(Roles = RoleConstants.Admin + "," + RoleConstants.Crew)]
+
+<PageTitle>Upper Bracket</PageTitle>
+
+<AuthorizeView>
+    @if (!SchemeReleaseService.BracketsReleased)
+    {
+        if (!context.User.IsInRole(RoleConstants.Admin))
+        {
+            <div class="alert alert-info mt-3">
+                De brackets zijn nog niet vrijgegeven.
+            </div>
+            return;
+        }
+
+        <div class="alert alert-warning mt-3">
+            Je bekijkt de upper bracket als admin (brackets nog niet vrijgegeven).
+        </div>
+    }
+
+    @if (context.User.IsInRole(RoleConstants.Admin))
+    {
+        <h3>Upper Bracket</h3>
+
+        <div class="table-responsive">
+            <table class="table table-bordered table-striped">
+                <thead>
+                    <tr>
+                        <th>Position Code</th>
+                        <th>Name</th>
+                        <th>Matches Played</th>
+                        <th>Matches Won</th>
+                        <th>Matches Lost</th>
+                        <th>Draw</th>
+                        <th>Points Scored</th>
+                        <th>Points Lost</th>
+                        <th>Total Points</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var entry in _upperBracketEntries)
+                    {
+                        <tr>
+                            <td>@entry.PositionCode</td>
+                            <td>@entry.User</td>
+                            <td>@entry.Stats.MatchesPlayed</td>
+                            <td>@entry.Stats.MatchesWon</td>
+                            <td>@entry.Stats.MatchesLost</td>
+                            <td>@entry.Stats.Draws</td>
+                            <td>@entry.Stats.PointsScored</td>
+                            <td>@entry.Stats.PointsLost</td>
+                            <td>@entry.Stats.TotalPoints</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    @if (_upperBracketEntries.Count == 0)
+    {
+        <div>No players in upper bracket.</div>
+    }
+    else
+    {
+        <h5>Upper Bracket Speelschema</h5>
+        @foreach (var round in _upperBracketRounds)
+        {
+            <h6>Round @round.Key</h6>
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Match</th>
+                            <th>Baan</th>
+                            <th>Team A</th>
+                            <th>Score</th>
+                            <th>Team B</th>
+                            <th>Score</th>
+                            @if (context.User.IsInRole(RoleConstants.Admin) || context.User.IsInRole(RoleConstants.Crew))
+                            {
+                                <th>Edit Scores</th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @for (int i = 0; i < round.Value.Count; i++)
+                        {
+                            var match = round.Value[i];
+                            <tr class="@(IsActive(match.Id) ? "table-success" : "")">
+                                <td>@($"Match {i + 1}")</td>
+                                <td>@match.Court</td>
+                                <td>@string.Join(", ", match.TeamA.Select(p => _upperBracketEntries.First(e => e.UserId == p.Id).PositionCode + " (" + p.Name + ")"))</td>
+                                <td>@(match.IsFinished? match.ScoreTeamA: "")</td>
+                                <td>@string.Join(", ", match.TeamB.Select(p => _upperBracketEntries.First(e => e.UserId == p.Id).PositionCode + " (" + p.Name + ")"))</td>
+                                <td>@(match.IsFinished? match.ScoreTeamB: "")</td>
+                                @if (i == 0)
+                                {
+                                    @* <td rowspan="@round.Value.Count"> *@
+                                    @*     @string.Join(", ", round.BreakPlayers.Select(p => GetPositionCode(p) + " (" + p.Name + ")")) *@
+                                    @* </td> *@
+                                }
+                                @if (context.User.IsInRole(RoleConstants.Admin) || context.User.IsInRole(RoleConstants.Crew))
+                                {
+                                    <td>
+                                        @* @if (_isMobile) *@
+                                        @* { *@
+                                            <button class="btn btn-sm btn-primary" @onclick="() => OpenEditModal(match, round.Key)">Edit</button>
+                                        @* } *@
+                                        @* else *@
+                                        @* { *@
+                                        @*     <EditForm Context="_" Model="@match" OnValidSubmit="() => UpdateBracketMatchScoreAsync(round.Key, match.Id, match.ScoreTeamA, match.ScoreTeamB)"> *@
+                                        @*         <InputNumber class="form-control" @bind-Value="match.ScoreTeamA" /> *@
+                                        @*         <InputNumber class="form-control" @bind-Value="match.ScoreTeamB" /> *@
+                                        @*         <button type="submit" class="btn btn-sm btn-primary" @onclick="() => match.IsFinished = true"> *@
+                                        @*             Save *@
+                                        @*         </button> *@
+                                        @*     </EditForm> *@
+                                        @* } *@
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+
+    @if (_showEditModal && _editMatch != null)
+    {
+        <div class="modal fade show d-block" tabindex="-1" style="background:rgba(0,0,0,0.5);" role="dialog">
+            <div class="modal-dialog modal-dialog-centered" role="document">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Edit Scores</h5>
+                        <button type="button" class="btn-close" @onclick="CloseEditModal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <EditForm Context="_" Model="@_editMatch" OnValidSubmit="HandleModalEditSubmitAsync">
+                            <DataAnnotationsValidator />
+                            <div class="mb-3">
+                                <label>Score Team A</label>
+                                <InputNumber class="form-control" @bind-Value="_editMatch.ScoreTeamA" />
+                                <ValidationMessage For="@(() => _editMatch.ScoreTeamA)" />
+                            </div>
+                            <div class="mb-3">
+                                <label>Score Team B</label>
+                                <InputNumber class="form-control" @bind-Value="_editMatch.ScoreTeamB" />
+                                <ValidationMessage For="@(() => _editMatch.ScoreTeamB)" />
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">Save</button>
+                        </EditForm>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-backdrop fade show"></div>
+    }
+</AuthorizeView>
+
+@code {
+
+    [Inject]
+    public IHttpContextAccessor HttpContextAccessor { get; set; } = null!;
+
+    private List<BracketEntryViewModel> _upperBracketEntries = new();
+    private Dictionary<int, List<BracketMatch>> _upperBracketRounds = new();
+
+    // private bool _isMobile = false;
+    private bool _showEditModal = false;
+    private EditMatch? _editMatch;
+    private int _editRoundNumber;
+
+    private Timer? _timer;
+    private Guid _activeId = Guid.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (SchemeReleaseService.BracketsReleased)
+        {
+            await ReloadDataAsync();
+        }
+
+        RealtimeService.ReceiveScoreUpdateEventHandler += RealtimeServiceOnReceiveScoreUpdateEventHandler;
+
+        await RealtimeService.StartConnectionAsync();
+
+        // Timer checks every 5 seconds (adjust as needed)
+        _timer = new Timer(5);
+        _timer.Elapsed += OnTimerElapsed;
+        _timer.AutoReset = true;
+        _timer.Start();
+    }
+
+    // protected override async Task OnAfterRenderAsync(bool firstRender)
+    // {
+    //     if (firstRender)
+    //     {
+    //         // _isMobile = await JS.InvokeAsync<bool>("isMobile");
+    //         StateHasChanged();
+    //     }
+    // }
+
+    private async void OnTimerElapsed(object? sender, ElapsedEventArgs e)
+    {
+        var now = DateTime.Now;
+
+        var pouleActiveRecord = _upperBracketRounds.SelectMany(r => r.Value)
+            .Where(r => r.StartTime <= now)
+            .OrderByDescending(r => r.StartTime)
+            .FirstOrDefault();
+
+        _activeId = pouleActiveRecord?.Id ?? Guid.Empty;
+
+        // Trigger UI update
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private bool IsActive(Guid matchId)
+    {
+        return _activeId == matchId;
+    }
+
+    private async Task ReloadDataAsync()
+    {
+        var upperBracketInfo = await BracketService.GetUpperBracketInfoAsync();
+
+        var upperBracketEntries = upperBracketInfo.Entries.Select(e => new BracketEntryViewModel
+            {
+                PositionCode = e.PositionCode,
+                UserId = e.User.Id,
+                User = $"{e.User.Name} ({e.User.DiscordName})",
+                Stats = PlayerStatsService.GetPlayerStatsForBracket(e.User, e.BracketId, upperBracketInfo.Matches)
+            }).ToList();
+
+        var grouped = upperBracketInfo.Matches.GroupBy(m => m.BracketRoundNumber);
+        _upperBracketRounds = grouped.ToDictionary(r => r.Key, r => r.ToList());
+
+        _upperBracketEntries = upperBracketEntries
+            .OrderByDescending(e => e.Stats.TotalPoints)
+            .ThenByDescending(e => e.Stats.PointsScored - e.Stats.PointsLost)
+            .ThenByDescending(e => e.Stats.PointsScored)
+            .ThenByDescending(e => e.Stats.MatchesWon)
+            .ThenByDescending(e => e.Stats.Draws)
+            .ThenBy(e => e.Stats.MatchesLost)
+            .ThenBy(e => e.Stats.Player.Name)
+            .ToList();
+    }
+
+    private async void RealtimeServiceOnReceiveScoreUpdateEventHandler(object? sender, ReceiveScoreUpdate e)
+    {
+        foreach (var match in _upperBracketRounds.Select(round => round.Value.FirstOrDefault(m => m.Id == e.MatchId)).OfType<BracketMatch>())
+        {
+            match.ScoreTeamA = e.ScoreA;
+            match.ScoreTeamB = e.ScoreB;
+            match.IsFinished = true;
+
+            await ReloadDataAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task UpdateBracketMatchScoreAsync(int roundNumber, Guid bracketMatchId, int scoreA, int scoreB)
+    {
+        var round = _upperBracketRounds.FirstOrDefault(r => r.Key == roundNumber);
+        if (round.Value.Any())
+        {
+            var match = round.Value.First(m => m.Id == bracketMatchId);
+            match.ScoreTeamA = scoreA;
+            match.ScoreTeamB = scoreB;
+            match.IsFinished = true;
+            await InvokeAsync(StateHasChanged);
+
+            // Persist the score update
+            await BracketService.UpdateBracketMatchScoreAsync(match, HttpContextAccessor.GetUserName());
+
+            // Broadcast score update to other clients
+            var matchId = match.Id;
+            await RealtimeService.BroadcastScoreUpdateAsync(matchId, scoreA, scoreB);
+        }
+    }
+
+    private void OpenEditModal(BracketMatch match, int roundNumber)
+    {
+        _editMatch = new EditMatch
+        {
+            Id = match.Id,
+            ScoreTeamA = match.ScoreTeamA,
+            ScoreTeamB = match.ScoreTeamB,
+        };
+        _editRoundNumber = roundNumber;
+        _showEditModal = true;
+    }
+
+    private void CloseEditModal()
+    {
+        _showEditModal = false;
+        _editMatch = null;
+    }
+
+    private async Task HandleModalEditSubmitAsync()
+    {
+        if (_editMatch != null)
+        {
+            await UpdateBracketMatchScoreAsync(_editRoundNumber, _editMatch.Id, _editMatch.ScoreTeamA, _editMatch.ScoreTeamB);
+            _showEditModal = false;
+            _editMatch = null;
+        }
+    }
+
+    public void Dispose()
+    {
+        RealtimeService.ReceiveScoreUpdateEventHandler -= RealtimeServiceOnReceiveScoreUpdateEventHandler;
+        _timer?.Dispose();
+    }
+}

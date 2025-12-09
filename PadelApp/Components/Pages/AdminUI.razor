@@ -1,0 +1,480 @@
+﻿@page "/admin-ui"
+
+@using System.Reflection
+@using System.Text
+@using System.Threading
+@using System.Collections
+@using System.Linq
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+@using PadelApp.Config
+@using PadelApp.Data
+@using PadelApp.Data.Models
+@using PadelApp.Services
+
+@attribute [Authorize(Roles = RoleConstants.Admin)]
+
+@inject ISchemeReleaseService SchemeReleaseService
+@inject IRealtimeService RealtimeService
+@inject IAuditService AuditService
+@inject UserManager<ApplicationUser> UserManager
+@inject IDatabaseSeeder DatabaseSeeder
+@inject IPouleService PouleService
+@inject IPlayerStatsService PlayerStatsService
+@inject PadelDbContext DbContext
+@inject NavigationManager Navigation
+
+<PageTitle>Admin UI</PageTitle>
+
+<AuthorizeView>
+    <h3>Admin Panel</h3>
+
+    <h3>Poule Release Settings</h3>
+
+    <div class="mb-3">
+        <strong>Poules released:</strong>
+        <span class="@(SchemeReleaseService.PoulesReleased ? "text-success" : "text-danger")">
+            @(SchemeReleaseService.PoulesReleased ? "Yes" : "No")
+        </span>
+    </div>
+
+    <div class="mb-3">
+        <button class="btn btn-success me-2" @onclick="ReleasePoulesAsync" disabled="@SchemeReleaseService.PoulesReleased">
+            Poules vrijgeven
+        </button>
+        <button class="btn btn-warning" @onclick="HidePoules" disabled="@(!SchemeReleaseService.PoulesReleased)">
+            Poules verbergen
+        </button>
+    </div>
+
+    <h3>Bracket Release Settings</h3>
+
+    <div class="mb-3">
+        <strong>Brackets released:</strong>
+        <span class="@(SchemeReleaseService.BracketsReleased ? "text-success" : "text-danger")">
+            @(SchemeReleaseService.BracketsReleased ? "Yes" : "No")
+        </span>
+    </div>
+
+    <div class="mb-3">
+        <button class="btn btn-success" @onclick="ReleaseBracketsAsync" disabled="@SchemeReleaseService.BracketsReleased">
+            Brackets vrijgeven
+        </button>
+        <button class="btn btn-warning ms-2" @onclick="HideBracketsAsync" disabled="@(!SchemeReleaseService.BracketsReleased)">
+            Brackets verbergen
+        </button>
+    </div>
+    @if (_releaseStatus != null)
+    {
+        <div class="alert alert-info mt-3">@_releaseStatus</div>
+    }
+    <div class="mb-3">
+        <button class="btn btn-success" @onclick="ResetDatabaseAsync" disabled="@_resettingDatabase">
+            Reset database
+        </button>
+    </div>
+
+    <div class="mb-3">
+        <button class="btn btn-success" @onclick="ExportDatabaseAsCSVAsync" disabled="@_exportingDatabase">
+            Export database
+        </button>
+    </div>
+</AuthorizeView>
+
+@code {
+
+    [Inject]
+    public IHttpContextAccessor HttpContextAccessor { get; set; } = null!;
+
+    private string? _releaseStatus;
+
+    private bool _resettingDatabase;
+    private bool _exportingDatabase;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RealtimeService.StartConnectionAsync();
+    }
+
+    private async Task ReleasePoulesAsync()
+    {
+        if (SchemeReleaseService.PoulesReleased)
+        {
+            _releaseStatus = "Poules zijn al vrijgegeven.";
+            return;
+        }
+
+        await DatabaseSeeder.SeedPouleDatabaseAsync();
+
+        SchemeReleaseService.ReleasePoules();
+
+        var userId = HttpContextAccessor.GetUserId();
+        var user = await UserManager.FindByIdAsync(userId);
+        await AuditService.LogPoulesReleasedAsync(user!);
+    }
+
+    private void HidePoules()
+    {
+        SchemeReleaseService.HidePoules();
+        _releaseStatus = "Poules zijn verborgen.";
+        StateHasChanged();
+    }
+
+    private async Task ReleaseBracketsAsync()
+    {
+        if (SchemeReleaseService.BracketsReleased)
+        {
+            _releaseStatus = "Brackets zijn al vrijgegeven.";
+            return;
+        }
+
+        var groupedPlayers = new Dictionary<Poule, List<ApplicationUser>>();
+        var result = await PouleService.GetAllPouleInfo(includePlayers: true);
+        foreach (var tuple in result)
+        {
+            var dict = new Dictionary<Guid, List<Match>>
+            {
+                [tuple.Item1.Id] = tuple.Item2
+            };
+            groupedPlayers.Add(tuple.Item1, GetSortedEntriesFromPoule(tuple.Item1, dict));
+        }
+
+        var upperPlayers = new List<OfficialDatabaseSeeder.BracketSeedPlayer>();
+        foreach (var poulePlayers in groupedPlayers)
+        {
+            int count = 1;
+            upperPlayers.AddRange(poulePlayers.Value.Take(2).Select(p =>
+            {
+                return new OfficialDatabaseSeeder.BracketSeedPlayer
+                {
+                    PositionCode = poulePlayers.Key.Code + count++,
+                    User = p,
+                };
+            }));
+        }
+
+        var lowerPlayers = new List<OfficialDatabaseSeeder.BracketSeedPlayer>();
+        foreach (var poulePlayers in groupedPlayers)
+        {
+            int count = 3;
+            lowerPlayers.AddRange(poulePlayers.Value.Skip(2).Select(p => new OfficialDatabaseSeeder.BracketSeedPlayer
+            {
+                PositionCode = poulePlayers.Key.Code + count++,
+                User = p
+            }));
+        }
+
+        await DatabaseSeeder.SeedBracketDatabaseAsync(BracketType.Upper, upperPlayers);
+        await DatabaseSeeder.SeedBracketDatabaseAsync(BracketType.Lower, lowerPlayers);
+
+        SchemeReleaseService.ReleaseBrackets();
+
+        var user = await UserManager.FindByIdAsync(HttpContextAccessor.GetUserId());
+        await AuditService.LogBracketsReleasedAsync(user!);
+
+        foreach (var bracketSeedPlayer in upperPlayers)
+        {
+            await RealtimeService.BroadcastBracketsReleasedAsync(bracketSeedPlayer.User.Id.ToString(), BracketType.Upper, bracketSeedPlayer.PositionCode);
+        }
+        foreach (var bracketSeedPlayer in lowerPlayers)
+        {
+            await RealtimeService.BroadcastBracketsReleasedAsync(bracketSeedPlayer.User.Id.ToString(), BracketType.Lower, bracketSeedPlayer.PositionCode);
+        }
+    }
+
+    private List<ApplicationUser> GetSortedEntriesFromPoule(Poule poule, Dictionary<Guid, List<Match>> dictionary)
+    {
+        var uniquePlayers = poule.Players.DistinctBy(p => p.Id);
+        var statsList = uniquePlayers.Select(player => PlayerStatsService.GetPlayerStatsForPoule(player, poule.Id, dictionary)).ToList();
+
+        var sorted = statsList
+            .OrderByDescending(e => e.TotalPoints)
+            .ThenByDescending(e => e.PointsScored - e.PointsLost)
+            .ThenByDescending(e => e.PointsScored)
+            .ThenByDescending(e => e.MatchesWon)
+            .ThenByDescending(e => e.Draws)
+            .ThenBy(e => e.MatchesLost)
+            .ThenBy(e => e.Player.Name)
+            .ToList();
+
+        return sorted.Select(s => s.Player).ToList();
+    }
+
+    private async Task HideBracketsAsync()
+    {
+        SchemeReleaseService.HideBrackets();
+
+        DbContext.Brackets.RemoveRange(DbContext.Brackets);
+        DbContext.BracketEntries.RemoveRange(DbContext.BracketEntries);
+        DbContext.BracketMatch.RemoveRange(DbContext.BracketMatch);
+        await DbContext.SaveChangesAsync();
+
+        _releaseStatus = "Brackets zijn verborgen.";
+        StateHasChanged();
+    }
+
+    private async Task ResetDatabaseAsync()
+    {
+        if (_resettingDatabase)
+        {
+            return;
+        }
+        _resettingDatabase = true;
+
+        try
+        {
+            // We updated the names of the players, so we need to reseed the user data.
+            DbContext.Users.RemoveRange(DbContext.Users);
+            DbContext.Roles.RemoveRange(DbContext.Roles);
+            DbContext.TournamentSettings.RemoveRange(DbContext.TournamentSettings);
+            DbContext.Poules.RemoveRange(DbContext.Poules);
+            DbContext.Matches.RemoveRange(DbContext.Matches);
+            DbContext.Audits.RemoveRange(DbContext.Audits);
+            DbContext.BracketMatch.RemoveRange(DbContext.BracketMatch);
+            DbContext.BracketEntries.RemoveRange(DbContext.BracketEntries);
+            DbContext.Brackets.RemoveRange(DbContext.Brackets);
+            await DbContext.SaveChangesAsync();
+
+            await DatabaseSeeder.SeedRoleDatabaseAsync();
+            await DatabaseSeeder.SeedPlayerDatabaseAsync();
+            SchemeReleaseService.ResetSettings();
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(e);
+        }
+        finally
+        {
+            _resettingDatabase = false;
+        }
+    }
+
+    private async Task ExportDatabaseAsCSVAsync()
+    {
+        if (_exportingDatabase)
+        {
+            return;
+        }
+
+        _exportingDatabase = true;
+        try
+        {
+            var sb = new StringBuilder();
+
+            // Export poule matches (Matches table) matching Matches.razor view
+            var pouleMatches = await DbContext.Matches
+                .Include(m => m.Poule)
+                .Include(m => m.TeamA)
+                .Include(m => m.TeamB)
+                .AsNoTracking()
+                .ToListAsync();
+
+            sb.AppendLine("\"Table: PouleMatches\"");
+            // Header aligned with Matches.razor: Poule, Starttijd, Team A, ScoreA, Team B, ScoreB, Result
+            sb.AppendLine(string.Join(",", new[] { CsvEscape("Poule"), CsvEscape("Starttijd"), CsvEscape("TeamA"), CsvEscape("ScoreA"), CsvEscape("TeamB"), CsvEscape("ScoreB"), CsvEscape("Result") }));
+
+            foreach (var m in pouleMatches)
+            {
+                var pouleName = m.Poule?.Name ?? string.Empty;
+                var start = m.StartTime.ToString("HH:mm");
+                var teamA = m.TeamA?.Select(u => u.Name) ?? Enumerable.Empty<string>();
+                var teamB = m.TeamB?.Select(u => u.Name) ?? Enumerable.Empty<string>();
+                var scoreA = m.ScoreTeamA >= 0 ? m.ScoreTeamA.ToString() : string.Empty;
+                var scoreB = m.ScoreTeamB >= 0 ? m.ScoreTeamB.ToString() : string.Empty;
+                string result;
+                if (!m.IsFinished) result = "Not played yet";
+                else if (m.ScoreTeamA > m.ScoreTeamB) result = "Team A wins";
+                else if (m.ScoreTeamA < m.ScoreTeamB) result = "Team B wins";
+                else result = "Draw";
+
+                var row = new[]
+                {
+                    CsvEscape(pouleName),
+                    CsvEscape(start),
+                    CsvEscape(string.Join(" | ", teamA)),
+                    CsvEscape(scoreA),
+                    CsvEscape(string.Join(" | ", teamB)),
+                    CsvEscape(scoreB),
+                    CsvEscape(result)
+                };
+                sb.AppendLine(string.Join(",", row));
+            }
+
+            sb.AppendLine();
+
+            // Export bracket matches structured like the bracket pages: Round, Match index, Starttijd, Team A (pos + name), ScoreA, Team B (pos + name), ScoreB, BreakPlayers
+            var bracketMatchesExists = DbContext.Model.GetEntityTypes().Any(e => e.ClrType == typeof(BracketMatch));
+            if (bracketMatchesExists)
+            {
+                // load entries to map player id -> position code
+                var entriesExists = DbContext.Model.GetEntityTypes().Any(e => e.ClrType == typeof(BracketEntry));
+                Dictionary<Guid, string> positionMap = new();
+                if (entriesExists)
+                {
+                    try
+                    {
+                        positionMap = await DbContext.BracketEntries.AsNoTracking().ToDictionaryAsync(be => be.UserId, be => be.PositionCode);
+                    }
+                    catch
+                    {
+                        positionMap = new Dictionary<Guid, string>();
+                    }
+                }
+
+                // fetch bracket matches and group by round number
+                var bMatches = await DbContext.BracketMatch
+                    .Include(b => b.TeamA)
+                    .Include(b => b.TeamB)
+                    .Include(b => b.Players)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                sb.AppendLine("\"Table: BracketMatches\"");
+                sb.AppendLine(string.Join(",", new[] { CsvEscape("Round"), CsvEscape("MatchIndex"), CsvEscape("Starttijd"), CsvEscape("TeamA"), CsvEscape("ScoreA"), CsvEscape("TeamB"), CsvEscape("ScoreB"), CsvEscape("BreakPlayers") }));
+
+                // determine round numbers grouping; try property RoundNumber or BracketRound navigation
+                var grouped = bMatches.GroupBy(b =>
+                {
+                    var rnProp = b.GetType().GetProperty("RoundNumber") ?? b.GetType().GetProperty("BracketRoundNumber");
+                    if (rnProp != null)
+                    {
+                        var val = rnProp.GetValue(b);
+                        if (val != null) return Convert.ToInt32(val);
+                    }
+                    // try navigation to BracketRound
+                    var roundNav = b.GetType().GetProperty("BracketRound");
+                    if (roundNav != null)
+                    {
+                        var r = roundNav.GetValue(b);
+                        if (r != null)
+                        {
+                            var rn = r.GetType().GetProperty("RoundNumber");
+                            if (rn != null)
+                            {
+                                var v = rn.GetValue(r);
+                                if (v != null) return Convert.ToInt32(v);
+                            }
+                        }
+                    }
+                    return 0;
+                });
+
+                foreach (var grp in grouped.OrderBy(g => g.Key))
+                {
+                    var roundNumber = grp.Key;
+                    // build break players for this round by finding entries not in any match players for this round
+                    var playersInRound = grp.SelectMany(m => m.Players.Select(p => p.Id)).Distinct().ToHashSet();
+                    var breakPlayersList = new List<string>();
+                    if (positionMap.Count > 0)
+                    {
+                        foreach (var kv in positionMap)
+                        {
+                            if (!playersInRound.Contains(kv.Key))
+                            {
+                                // find user name
+                                var user = await DbContext.Users.FindAsync(kv.Key);
+                                if (user != null) breakPlayersList.Add($"{kv.Value} ({user.Name})");
+                            }
+                        }
+                    }
+
+                    int matchIndex = 1;
+                    foreach (var bm in grp)
+                    {
+                        var start = string.Empty;
+                        var stProp = bm.GetType().GetProperty("StartTime");
+                        if (stProp != null)
+                        {
+                            var v = stProp.GetValue(bm);
+                            if (v != null && v is DateTime dt) start = dt.ToString("HH:mm");
+                        }
+
+                        string teamAStr = string.Join(" | ", (bm.TeamA).Select(u =>
+                        {
+                            var code = positionMap.GetValueOrDefault(u.Id, "?");
+                            return $"{code} ({u.Name})";
+                        }));
+
+                        string teamBStr = string.Join(" | ", (bm.TeamB).Select(u =>
+                        {
+                            var code = positionMap.GetValueOrDefault(u.Id, "?");
+                            return $"{code} ({u.Name})";
+                        }));
+
+                        var scoreA = bm.ScoreTeamA.ToString();
+                        var scoreB = bm.ScoreTeamB.ToString();
+
+                        var row = new[]
+                        {
+                            CsvEscape(roundNumber.ToString()),
+                            CsvEscape(matchIndex.ToString()),
+                            CsvEscape(start),
+                            CsvEscape(teamAStr),
+                            CsvEscape(scoreA),
+                            CsvEscape(teamBStr),
+                            CsvEscape(scoreB),
+                            CsvEscape(string.Join(" | ", breakPlayersList))
+                        };
+                        sb.AppendLine(string.Join(",", row));
+                        matchIndex++;
+                    }
+                    sb.AppendLine();
+                }
+            }
+
+            var bytes = Encoding.UTF8.GetBytes(sb.ToString());
+            var base64 = Convert.ToBase64String(bytes);
+
+            // Use a data URI to open CSV in new tab (user can save). For large DBs consider a server endpoint or streaming.
+            var uri = $"data:text/csv;charset=utf-8;base64,{base64}";
+            Navigation.NavigateTo(uri, forceLoad: true);
+
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(e.Message);
+        }
+        finally
+        {
+            _exportingDatabase = false;
+        }
+    }
+
+    private static string CsvEscape(string? value)
+    {
+        if (value is null)
+        {
+            return "\"\"";
+        }
+        var escaped = value.Replace("\"", "\"\"");
+        return $"\"{escaped}\"";
+    }
+
+    private static string FormatValue(object? value)
+    {
+        if (value == null) return string.Empty;
+        return value switch
+        {
+            DateTime dt => dt.ToString("o"),
+            byte[] b => Convert.ToBase64String(b),
+            Guid g => g.ToString(),
+            bool b => b ? "true" : "false",
+            IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+            _ => value.ToString() ?? string.Empty
+        };
+    }
+
+    private static bool IsSimpleType(Type type)
+    {
+        var underlying = Nullable.GetUnderlyingType(type) ?? type;
+        return underlying.IsPrimitive
+            || underlying.IsEnum
+            || underlying == typeof(string)
+            || underlying == typeof(decimal)
+            || underlying == typeof(DateTime)
+            || underlying == typeof(Guid)
+            || underlying == typeof(byte[])
+            || underlying == typeof(bool);
+    }
+}

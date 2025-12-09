@@ -1,0 +1,44 @@
+﻿@page "/users/delete/{Id:guid}"
+
+@using Microsoft.AspNetCore.Authorization
+@using PadelApp.Config
+@using PadelApp.Data.Models
+@using PadelApp.Services
+
+@attribute [Authorize(Roles = RoleConstants.Admin)]
+
+@inject IUserService UserService
+@inject NavigationManager Navigation
+
+<h3>Delete User</h3>
+
+@if (user is null)
+{
+    <p>User not found.</p>
+}
+else
+{
+    <div class="alert alert-danger">
+        Are you sure you want to delete <strong>@user.Name</strong>?
+    </div>
+    <button class="btn btn-danger" @onclick="DeleteUser">Delete</button>
+    <a class="btn btn-secondary ms-2" href="/users">Cancel</a>
+}
+
+@code {
+    [Parameter]
+    public Guid Id { get; set; }
+
+    private ApplicationUser? user;
+
+    protected override async Task OnInitializedAsync()
+    {
+        user = await UserService.GetByIdAsync(Id);
+    }
+
+    private async Task DeleteUser()
+    {
+        await UserService.DeleteAsync(Id);
+        Navigation.NavigateTo("/users");
+    }
+}
